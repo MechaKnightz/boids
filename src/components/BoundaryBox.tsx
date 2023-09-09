@@ -1,5 +1,5 @@
 import { useRef } from 'react';
-import { Mesh, } from 'three';
+import { Mesh } from 'three';
 
 type BoundaryBoxProps = {
 	size: [x: number, y: number, z: number]
@@ -19,6 +19,7 @@ const BoundaryBox: React.FC<BoundaryBoxProps> = ({ size }) => {
 				ref={ref}>
 				<boxGeometry args={size} />
 				<meshStandardMaterial color={'grey'} transparent opacity={0.5} />
+				{/* <planeBufferGeometry /> */}
 			</mesh>
 			<mesh
 				position={[0, -25.5, 0]}

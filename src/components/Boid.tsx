@@ -1,21 +1,19 @@
-import { useFrame } from "@react-three/fiber";
-import { Vector3 } from "three";
+import { BoidType } from "../types/BoidType";
 
 type BoidProps = {
-	flockHeading: Vector3;
-	flockCenter: Vector3;
-	avoidanceHeading: Vector3;
-	numFlockmates: number;
+	boidData: BoidType;
 }
 
-const Boid: React.FC<BoidProps> = ({ flockHeading }) => {
+const Boid: React.FC<BoidProps> = () => {
 	// const settings = useAppContext((s) => s.settings);
 
-	useFrame((state, delta) => {
+	// useFrame((state, delta) => {
 
-	})
+	// })
 
-	return null;
+	return <mesh>
+		<sphereGeometry args={[5, 5, 5]} />
+	</mesh>;
 }
 
 export { Boid };
