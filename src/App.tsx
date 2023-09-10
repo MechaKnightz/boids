@@ -1,6 +1,6 @@
 import { useRef } from 'react'
 import './App.css'
-import { WGPUInitializer } from './components/WGPUInitializer'
+import { WebGPUInitializer } from './components/WebGPUInitializer'
 import { AppContext } from './context/AppContext'
 import { createAppStore } from './store'
 
@@ -10,7 +10,7 @@ const App: React.FC = () => {
 
   return (
     <AppContext.Provider value={store}>
-      <WGPUInitializer />
+      <WebGPUInitializer />
     </AppContext.Provider>
   )
 }

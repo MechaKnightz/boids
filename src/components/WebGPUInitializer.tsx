@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { CustomCanvas } from "../CustomCanvas";
 import { useAppContext } from "../hooks/useAppContext";
 
-const WGPUInitializer: React.FC = () => {
+const WebGPUInitializer: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const device = useAppContext((s) => s.device);
   const setDevice = useAppContext((s) => s.setDevice)
@@ -30,5 +30,5 @@ const WGPUInitializer: React.FC = () => {
   return device ? <CustomCanvas /> : <div>Error loading WGPU adapter/device, make sure you have WGPU enabled</div>
 }
 
-export { WGPUInitializer };
+export { WebGPUInitializer };
 

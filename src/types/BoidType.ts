@@ -1,5 +1,4 @@
-import { Vector3 } from "three";
-import { Transform } from "./Transform";
+import { Object3D, Vector3 } from "three";
 
 export type BoidType = {
   position: Vector3;
@@ -12,6 +11,6 @@ export type BoidType = {
   centerOfFlockmates: Vector3;
   numPerceivedFlockmates: number;
 
-  cachedTransform: Transform;
-  target: Transform;
+  cachedTransform: Object3D;
+  target: Object3D;
 }

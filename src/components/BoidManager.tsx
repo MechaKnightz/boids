@@ -1,10 +1,16 @@
-import { useFrame, useThree } from "@react-three/fiber";
-import { useCallback, useState } from "react";
+import { useFrame } from "@react-three/fiber";
+import { useCallback, useMemo, useState } from "react";
 import { Euler, Object3D, Raycaster, Vector3 } from "three";
+import boidShader from '../assets/boid-shader.wgsl?raw';
 import { useAppContext } from "../hooks/useAppContext";
+import { useDevice } from "../hooks/useDevice";
+import { Settings } from "../store";
 import { BoidType } from "../types/BoidType";
-import { Transform } from "../types/Transform";
 import { Boid } from "./Boid";
+
+let time = 0;
+
+const boidsOutBufferStride = (Float32Array.BYTES_PER_ELEMENT * 3 * 3 + Int32Array.BYTES_PER_ELEMENT);
 
 const clamp = (num: number, min: number, max: number) => {
   return num <= min
@@ -37,8 +43,68 @@ const init = () => {
   }
 }
 init();
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-const computeBoids = (boids: BoidType[]) => {
+const computeBoids = (boids: BoidType[], boidsBuffer: GPUBuffer, device: GPUDevice, bindGroupLayout: GPUBindGroupLayout, pipeline: GPUComputePipeline, settings: Settings, simParamsBuffer: GPUBuffer, boidsOutBuffer: GPUBuffer, boidsOutReadBuffer: GPUBuffer) => {
+
+  const stride = 2 * 3; //boiddata size in number of floats
+  const boidsData = new Float32Array(boids.length * stride)
+  let j = 0;
+
+  for (let i = 0; i < boids.length; i++) {
+
+    //position
+    boidsData[j] = boids[i].position.x;
+    boidsData[j + 1] = boids[i].position.y;
+    boidsData[j + 2] = boids[i].position.z;
+
+    //direction
+    boidsData[j + 1] = boids[i].forward.x;
+    boidsData[j + 3] = boids[i].forward.y;
+    boidsData[j + 4] = boids[i].forward.z;
+
+    j = i * stride;
+  }
+
+  const simParamsData = new Float32Array([settings.perceptionRadius, settings.avoidanceRadius]);
+
+  // Populate the boidsData array with your Boid data here
+  device.queue.writeBuffer(boidsBuffer, 0, boidsData);
+  device.queue.writeBuffer(simParamsBuffer, 0, simParamsData);
+
+  const bindGroup = device.createBindGroup({
+    layout: bindGroupLayout,
+    entries: [
+      {
+        binding: 0,
+        resource: {
+          buffer: boidsBuffer,
+        },
+      },
+      {
+        binding: 1,
+        resource: {
+          buffer: simParamsBuffer,
+        },
+      },
+      {
+        binding: 2,
+        resource: {
+          buffer: boidsOutBuffer,
+        },
+      },
+    ],
+  });
+
+  // Dispatch the shader
+  const encoder = device.createCommandEncoder();
+  const computePass = encoder.beginComputePass();
+  computePass.setPipeline(pipeline);
+  computePass.setBindGroup(0, bindGroup);
+  computePass.dispatchWorkgroups(Math.ceil(boids.length / 256), 1, 1); // Adjust workgroup size as needed
+  computePass.end();
+
+  encoder.copyBufferToBuffer(boidsOutBuffer, 0, boidsOutReadBuffer, 0, boidsOutBufferStride);
+
+  device.queue.submit([encoder.finish()]);
 
   // if (boids === null || boids.length < 1) return
 
@@ -75,16 +141,95 @@ const computeBoids = (boids: BoidType[]) => {
   // boidBuffer.Release();
 }
 
+const secondPos = new Object3D()
+secondPos.position.x = 10;
+
 const BoidManager: React.FC = () => {
-  const [boids] = useState<BoidType[]>([{ acceleration: new Vector3(1, 1, 1), avgAvoidanceHeading: new Vector3(0, 0, 0), avgFlockHeading: new Vector3(0, 0, 0), cachedTransform: { position: new Vector3(0, 0, 0), rotation: new Euler(0, 0, 0, "XYZ") }, centerOfFlockmates: new Vector3(0, 0, 0), forward: new Vector3(0, 0, 0), numPerceivedFlockmates: 0, position: new Vector3(0, 0, 0), target: { position: new Vector3(0, 0, 0), rotation: new Euler(0, 0, 0, "XYZ") }, velocity: new Vector3(0, 0, 0) }]);
+
   const settings = useAppContext((s) => s.settings);
+  const device = useDevice()
+
+  const startSpeed = (settings.minSpeed + settings.maxSpeed) / 2;
+  const [boids, setBoids] = useState<BoidType[]>([
+    { acceleration: new Vector3(1, 1, 1), avgAvoidanceHeading: new Vector3(0, 0, 0), avgFlockHeading: new Vector3(0, 0, 0), cachedTransform: new Object3D, centerOfFlockmates: new Vector3(0, 0, 0), forward: new Vector3(0, 0, 1), numPerceivedFlockmates: 0, position: new Vector3(0, 0, 0), target: new Object3D, velocity: new Vector3(0, 0, 1).multiplyScalar(startSpeed) },
+    { acceleration: new Vector3(1, 1, 1), avgAvoidanceHeading: new Vector3(0, 0, 0), avgFlockHeading: new Vector3(0, 0, 0), cachedTransform: secondPos, centerOfFlockmates: new Vector3(0, 0, 0), forward: new Vector3(0, 0, 1), numPerceivedFlockmates: 0, position: new Vector3(50, 50, 0), target: new Object3D, velocity: new Vector3(0, 0, 1).multiplyScalar(startSpeed) }
+  ]);
 
   const isHeadingForCollision = useCallback((position: Vector3, forward: Vector3, raycaster: Raycaster, obstacles: Object3D[]) => {
     raycaster.set(position, forward);
     raycaster.far = settings.collisionAvoidDst;
 
     return raycaster.intersectObjects(obstacles).length > 0
-  }, [settings])
+  }, [settings]);
+
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { shaderModule, bindGroupLayout, pipelineLayout, pipeline, boidsBuffer, boidsBufferSize, boidsOutReadBuffer, simParamsBuffer, boidsOutBuffer } = useMemo(() => {
+
+    const shaderModule = device.createShaderModule({
+      code: boidShader
+    });
+
+    // Create a bind group layout and pipeline layout
+    const bindGroupLayout = device.createBindGroupLayout({
+      entries: [
+        {
+          binding: 0,
+          visibility: GPUShaderStage.COMPUTE,
+          buffer: {
+            type: "read-only-storage",
+          },
+        },
+        {
+          binding: 1,
+          visibility: GPUShaderStage.COMPUTE,
+          buffer: {
+            type: "uniform",
+          },
+        },
+        {
+          binding: 2,
+          visibility: GPUShaderStage.COMPUTE,
+          buffer: {
+            type: "storage",
+          },
+        },
+      ],
+    });
+
+    const pipelineLayout = device.createPipelineLayout({
+      bindGroupLayouts: [bindGroupLayout],
+    });
+
+    const pipeline = device.createComputePipeline({
+      layout: pipelineLayout,
+      compute: {
+        module: shaderModule,
+        entryPoint: "main",
+      },
+    });
+
+    const boidsBufferSize = boids.length * (Float32Array.BYTES_PER_ELEMENT * 3 * 2);
+    const boidsBuffer = device.createBuffer({
+      size: boidsBufferSize,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    });
+
+    const simParamsBufferSize = Float32Array.BYTES_PER_ELEMENT * 2;
+    const simParamsBuffer = device.createBuffer({
+      size: simParamsBufferSize,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+
+    const boidsOutBufferSize = boids.length * boidsOutBufferStride;
+    const boidsOutBuffer = device.createBuffer({
+      size: boidsOutBufferSize,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+    });
+
+    const boidsOutReadBuffer = device.createBuffer({ size: boidsOutBufferSize, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+
+    return { shaderModule, bindGroupLayout, pipelineLayout, pipeline, boidsBuffer, boidsBufferSize, simParamsBuffer, simParamsBufferSize, boidsOutBuffer, boidsOutBufferSize, boidsOutReadBuffer }
+  }, [boids.length, device])
 
   const steerTowards = useCallback(
     (vector: Vector3, velocity: Vector3): Vector3 => {
@@ -93,7 +238,7 @@ const BoidManager: React.FC = () => {
     }
     , [settings.maxSpeed, settings.maxSteerForce])
 
-  const obstacleRays = useCallback((position: Vector3, forward: Vector3, cachedTransform: Transform, raycaster: Raycaster, obstacles: Object3D[]) => {
+  const obstacleRays = useCallback((position: Vector3, forward: Vector3, cachedTransform: Object3D, raycaster: Raycaster, obstacles: Object3D[]) => {
     for (let i = 0; i < directions.length; i++) {
       // const dir = cachedTransform.getWorldDirection(directions[i]);
       const dir = cachedTransform.position.applyEuler(cachedTransform.rotation).add(directions[i]);
@@ -111,12 +256,12 @@ const BoidManager: React.FC = () => {
   }, [settings.collisionAvoidDst])
 
   const updateBoid = useCallback((boid: BoidType, raycaster: Raycaster, delta: number, obstacles: Object3D[]) => {
-    // eslint-disable-next-line no-debugger
-    debugger;
+
     let acceleration = new Vector3(0, 0, 0);
 
     if (boid.target != null) {
-      const offsetToTarget = (boid.target.position.sub(boid.position));
+
+      const offsetToTarget = (boid.target.position.sub(boid.position).addScalar(1));
       acceleration = steerTowards(offsetToTarget, boid.velocity).multiplyScalar(settings.targetWeight);
     }
 
@@ -153,37 +298,29 @@ const BoidManager: React.FC = () => {
     boid.cachedTransform.position.z = calcTrans.z;
 
     //you are supposed to set forward
-
-    const temp = new Object3D();
-    temp.setRotationFromEuler(boid.cachedTransform.rotation);
-    temp.position.x = boid.cachedTransform.position.x;
-    temp.position.y = boid.cachedTransform.position.y;
-    temp.position.z = boid.cachedTransform.position.z;
-    temp.lookAt(dir.x, dir.y, dir.z);
-    boid.cachedTransform.rotation = temp.rotation;
-    boid.cachedTransform.position = temp.position;
-
-
+    boid.cachedTransform.setRotationFromEuler(new Euler(dir.x, dir.y, dir.z, "XYZ"));
     boid.position = boid.cachedTransform.position;
     boid.forward = dir;
   }, [isHeadingForCollision, obstacleRays, settings.alignWeight, settings.avoidCollisionWeight, settings.cohesionWeight, settings.maxSpeed, settings.minSpeed, settings.seperateWeight, settings.targetWeight, steerTowards])
 
-  const scene = useThree(state => state.scene)
 
   useFrame((state, delta) => {
-    computeBoids(boids);
-    console.log(boids[0])
+    computeBoids(boids, boidsBuffer, device, bindGroupLayout, pipeline, settings, simParamsBuffer, boidsOutBuffer, boidsOutReadBuffer);
+
     for (const boid of boids) {
       updateBoid(boid, state.raycaster, delta, []);
     }
-    console.log(boids[0])
-    console.log(scene.children)
-    scene.children[0].lookAt
+    setBoids([...boids.map((b) => ({ ...b }))])
 
+    time += delta;
+    if (time > 1) {
+      console.log(boids)
+      time = 0;
+    }
   })
 
   return <>
-    {boids.map((b) => <Boid boidData={b} />)}
+    {boids.map((b, i) => <Boid key={i} boidData={b} />)}
   </>;
 }
 
